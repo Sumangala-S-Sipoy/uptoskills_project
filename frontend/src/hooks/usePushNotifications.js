@@ -3,6 +3,17 @@ import { getToken, onMessage } from 'firebase/messaging';
 import { getFirebaseMessaging, firebaseConfig } from '../lib/firebase';
 import { toast } from 'sonner';
 import { pushService } from '../services';
+
+// ─── Module-level guard ──────────────────────────────────────────────────────
+// The hook is mounted by multiple components simultaneously (Dashboard, 
+// NotificationBell, Notification). Without a shared flag each instance would
+// independently call requestPermissionAndSubscribe() on mount and show the
+// "subscribed" toast 3× in a row. This flag ensures the subscribe + toast only
+// runs ONCE per page session regardless of how many components mount the hook.
+let _subscribeInProgress = false;
+let _subscribed = false;
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const usePushNotifications = (scrollThreshold = 0.7) => {
   const [token, setToken] = useState(null);
   const [permission, setPermission] = useState(
@@ -10,6 +21,7 @@ export const usePushNotifications = (scrollThreshold = 0.7) => {
   );
   const scrolledRef = useRef(false);
 
+  // Set up Firebase foreground message listener (safe to call in every instance)
   useEffect(() => {
     let unsubscribe = null;
 
@@ -19,60 +31,38 @@ export const usePushNotifications = (scrollThreshold = 0.7) => {
 
       unsubscribe = onMessage(messaging, (payload) => {
         console.log("Foreground message received:", payload);
-        const title = payload.notification?.title || "New Notification";
-        const body = payload.notification?.body || "You have a new message";
-        
-        // Show in-app toast
-        toast(title, { description: body });
-
-        // Force a native OS desktop notification even if tab is open
-        if ("Notification" in window && Notification.permission === "granted") {
-          const opts = { body: body };
-          if (payload.notification?.imageUrl) opts.icon = payload.notification.imageUrl;
-
-          navigator.serviceWorker.ready.then(registration => {
-            registration.showNotification(title, opts).catch(err => {
-              console.error("SW showNotification failed, trying window Notification:", err);
-              new Notification(title, opts);
-            });
-          }).catch(err => {
-             console.error("SW ready failed:", err);
-             new Notification(title, opts);
-          });
-        }
+        // OS notification and toast are handled by NotificationBell SSE stream
+        // to avoid double-popups.
       });
     };
 
     setupForegroundMessaging();
 
-    // Check permission immediately instead of waiting for scroll
-    if ("Notification" in window) {
-      if (Notification.permission === 'granted' || Notification.permission === 'default') {
-        // We will call requestPermissionAndSubscribe slightly later because it relies on the function below
-        // Actually, we can't call it here directly because requestPermissionAndSubscribe is defined below.
-      }
-    }
-
     return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
+      if (unsubscribe) unsubscribe();
     };
   }, []);
 
   const requestPermissionAndSubscribe = async () => {
+    // Deduplicate: if already subscribed or a subscribe is in progress, skip.
+    if (_subscribed || _subscribeInProgress) return;
+    _subscribeInProgress = true;
+
     try {
       const currentPermission = await Notification.requestPermission();
       setPermission(currentPermission);
+
       if (currentPermission === 'granted') {
         const messaging = await getFirebaseMessaging();
-        if (!messaging) return;
-        
-        // Pass the config as URL params to the SW so we don't hardcode it in public/
+        if (!messaging) {
+          _subscribeInProgress = false;
+          return;
+        }
+
         const swUrl = `/firebase-messaging-sw.js?apiKey=${firebaseConfig.apiKey}&projectId=${firebaseConfig.projectId}&messagingSenderId=${firebaseConfig.messagingSenderId}&appId=${firebaseConfig.appId}&authDomain=${firebaseConfig.authDomain}&storageBucket=${firebaseConfig.storageBucket}`;
-        
+
         const registration = await navigator.serviceWorker.register(swUrl);
-        
+
         const currentToken = await getToken(messaging, {
           vapidKey: import.meta.env.VITE_FIREBASE_VAPID_KEY,
           serviceWorkerRegistration: registration,
@@ -80,42 +70,44 @@ export const usePushNotifications = (scrollThreshold = 0.7) => {
 
         if (currentToken) {
           setToken(currentToken);
-          // Send token to backend
           await pushService.subscribe(currentToken);
           console.log("Push token sent to backend successfully.");
-          toast.success("Successfully subscribed to notifications!");
+          // ✅ Toast fires exactly once — module-level flag prevents re-entry
+          toast.success("Push notifications enabled.");
+          _subscribed = true;
         }
       } else {
         toast.error("Permission denied for push notifications.");
       }
     } catch (error) {
       console.error("Error subscribing to push notifications:", error);
+    } finally {
+      _subscribeInProgress = false;
     }
   };
 
+  // Auto-subscribe on mount if permission is already granted.
+  // The module-level flag ensures only the first mounting component does work.
   useEffect(() => {
     if ("Notification" in window && Notification.permission === "granted") {
       requestPermissionAndSubscribe();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Trigger subscribe when user scrolls past threshold (first time only).
   useEffect(() => {
     const handleScroll = () => {
-      if (scrolledRef.current) return; // Already triggered
+      if (scrolledRef.current) return;
 
       const scrollTop = window.scrollY || document.documentElement.scrollTop;
       const scrollHeight = document.documentElement.scrollHeight;
       const clientHeight = document.documentElement.clientHeight;
-
       const scrolledPercentage = scrollTop / (scrollHeight - clientHeight);
-      
+
       if (scrolledPercentage >= scrollThreshold) {
         scrolledRef.current = true;
-        // Check if we haven't asked or if it's default
-        if (Notification.permission === 'default') {
-          requestPermissionAndSubscribe();
-        } else if (Notification.permission === 'granted') {
-          // If already granted, just make sure we have the token sent
+        if (Notification.permission === 'default' || Notification.permission === 'granted') {
           requestPermissionAndSubscribe();
         }
       }
@@ -123,6 +115,7 @@ export const usePushNotifications = (scrollThreshold = 0.7) => {
 
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollThreshold]);
 
   return { requestPermissionAndSubscribe, token, permission };
