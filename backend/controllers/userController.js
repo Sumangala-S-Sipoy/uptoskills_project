@@ -58,20 +58,27 @@ const listUsers = asyncHandler(async (req, res) => {
 
   const cacheKey = `users:${req.orgId}:${page}:${limit}:${search || ""}`;
 
-  const cachedData = await redisClient.get(cacheKey);
+  let cachedData = null;
 
-  if (cachedData) {
-
-    const data = JSON.parse(cachedData);
-
-    return response.paginated(
-      res,
-      data.users,
-      data.total,
-      page,
-      limit
-    );
+if (redisClient.isOpen) {
+  try {
+    cachedData = await redisClient.get(cacheKey);
+  } catch (err) {
+    console.warn("⚠️ Redis cache unavailable. Continuing without cache.");
   }
+}
+
+if (cachedData) {
+  const data = JSON.parse(cachedData);
+
+  return response.paginated(
+    res,
+    data.users,
+    data.total,
+    page,
+    limit
+  );
+}
 
 
 
@@ -104,13 +111,19 @@ const listUsers = asyncHandler(async (req, res) => {
     prisma.user.count({ where }),
   ]);
 
-  await redisClient.set(
-    cacheKey,
-    JSON.stringify({ users, total }),
-    {
-      EX: 300,
-    }
-  );
+  if (redisClient.isOpen) {
+  try {
+    await redisClient.set(
+      cacheKey,
+      JSON.stringify({ users, total }),
+      {
+        EX: 300,
+      }
+    );
+  } catch (err) {
+    console.warn("⚠️ Redis cache unavailable. Skipping cache.");
+  }
+}
 
   return response.paginated(res, users, total, page, limit);
 });
