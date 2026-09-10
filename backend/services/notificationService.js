@@ -1,7 +1,7 @@
 const { prisma } = require("../config/postgres");
 const eventBus = require("./eventBus");
-const { sendPushNotification } = require("./pushService");
-const { send } = require("./emailService");
+const pushService = require("./pushService");
+const emailService = require("./emailService");
 const { compileTemplate } = require("./emailTemplates");
 
 // ---------------------------------------------------------------------------
@@ -30,7 +30,8 @@ const createNotification = async ({
   });
 
   // Also send a push notification since this bypasses preferences
-  await sendPushNotification(userId, { title: type, body: message, icon: link });
+  pushService.sendPushNotification(userId, { title: type, body: message, icon: link })
+    .catch(err => console.error("Failed to send push notification:", err));
 
   return notification;
 };
@@ -150,7 +151,7 @@ const dispatchNotification = async ({
   // 2. PUSH NOTIFICATION
   if (pushEnabled) {
     // Fire-and-forget push notification
-    sendPushNotification(userId, { 
+    pushService.sendPushNotification(userId, { 
       title, 
       body: message, 
       icon: link 
@@ -178,30 +179,35 @@ const dispatchNotification = async ({
     console.log(`[NotificationService] Email Disabled for user ${userId} and category "${categoryName}"`);
   } else if (!user || !user.email) {
     console.warn(`[NotificationService] User Email Missing for user ${userId}. Skipping email.`);
+  } else if (process.env.EMAIL_USER && user.email === process.env.EMAIL_USER) {
+    // SAFETY GUARD: Never send a notification email to the SMTP sender account itself.
+    // EMAIL_USER is the outbound mail account, not a real user inbox.
+    console.warn(`[NotificationService] Blocked: email recipient matches EMAIL_USER (sender). Skipping.`);
   } else {
     try {
       console.log(`[NotificationService] Generating Template for type "${type}"`);
       const { subject, html, text } = compileTemplate(type, message, link, metadata);
 
-      // SECURITY: 'to' is ALWAYS user.email (fetched fresh from DB above).
-      // EMAIL_USER is ONLY the sender account — never the recipient.
-      console.log(`[NotificationService] Sending Email to ${user.email}`);
-      send({
+      // SECURITY: 'to' is ALWAYS user.email fetched fresh from DB using userId.
+      // This is the email address of the EXACT user who triggered the event.
+      // No other user's email is ever used here.
+      console.log(`[NotificationService] Sending Email to user ${userId} <${user.email}>`);
+      emailService.send({
         to: user.email,
         subject,
         html,
         text,
       }).then(success => {
         if (success) {
-          console.log(`[NotificationService] Email Sent Successfully to ${user.email}`);
+          console.log(`[NotificationService] Email Sent Successfully to user ${userId} <${user.email}>`);
         } else {
-          console.error(`[NotificationService] SMTP Failure for ${user.email}`);
+          console.error(`[NotificationService] SMTP Failure for user ${userId} <${user.email}>`);
         }
       }).catch(err => {
-        console.error(`[NotificationService] SMTP Failure for ${user.email}:`, err);
+        console.error(`[NotificationService] SMTP Failure for user ${userId}:`, err);
       });
     } catch (err) {
-      console.error(`[NotificationService] SMTP Setup Failure for ${user ? user.email : userId}:`, err);
+      console.error(`[NotificationService] SMTP Setup Failure for user ${userId}:`, err);
     }
   }
 
@@ -226,6 +232,18 @@ const markAllNotificationsRead = async (userId) => {
   });
 };
 
+const deleteNotification = async (id, userId) => {
+  return prisma.notification.deleteMany({
+    where: { id: Number(id), userId: Number(userId) },
+  });
+};
+
+const deleteAllNotifications = async (userId) => {
+  return prisma.notification.deleteMany({
+    where: { userId: Number(userId) },
+  });
+};
+
 module.exports = {
   createNotification,
   dispatchNotification,
@@ -233,4 +251,6 @@ module.exports = {
   createInAppNotification: dispatchNotification, // Alias for backward compatibility just in case
   markAllNotificationsRead,
   markNotificationRead,
+  deleteNotification,
+  deleteAllNotifications,
 };
