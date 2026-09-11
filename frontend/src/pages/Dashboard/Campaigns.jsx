@@ -17,8 +17,14 @@ const [editingId, setEditingId] = useState(null);
 
 const [draft, setDraft] = useState({
   name: "",
-  subject: "",
   audience: "all",
+  steps: [
+    {
+      day: 0,
+      subject: "",
+      body: "",
+    },
+  ],
 });
   const load = async () => {
     setLoading(true);
@@ -48,10 +54,16 @@ const [draft, setDraft] = useState({
     setEditingId(null);
 
     setDraft({
-      name: "",
+  name: "",
+  audience: "all",
+  steps: [
+    {
+      day: 0,
       subject: "",
-      audience: "all",
-    });
+      body: "",
+    },
+  ],
+});
 
     load();
   } catch (err) {
@@ -69,6 +81,27 @@ const [draft, setDraft] = useState({
     toast.error(err?.message || "Pause failed");
   }
 };
+
+const handleStop = async (id) => {
+  try {
+    await campaignService.stop(id);
+    toast.success("Campaign stopped");
+    load();
+  } catch (err) {
+    toast.error(err?.message || "Stop failed");
+  }
+};
+
+const handleResume = async (id) => {
+  try {
+    await campaignService.resume(id);
+    toast.success("Campaign resumed");
+    load();
+  } catch (err) {
+    toast.error(err?.message || "Resume failed");
+  }
+};
+
   const handleDelete = async (id) => {
   const ok = window.confirm("Delete this campaign?");
   if (!ok) return;
@@ -86,8 +119,14 @@ const handleEdit = (campaign) => {
 
   setDraft({
   name: campaign.name || "",
-  subject: campaign.conditions?.subject || "",
   audience: campaign.conditions?.audience || "all",
+  steps: campaign.conditions?.steps || [
+    {
+      day: 0,
+      subject: campaign.conditions?.subject || "",
+      body: campaign.conditions?.body || "",
+    },
+  ],
 });
 
   setShowCreate(true);
@@ -112,30 +151,49 @@ const handleEdit = (campaign) => {
                 <div>
                   <div className="font-medium">{c.name}</div>
                   <div className="text-xs text-slate-500">
-  {c.conditions?.audience || "All"} · {c.conditions?.subject || "—"}
+  {c.conditions?.audience || "All"} ·{" "}
+{c.conditions?.steps?.length
+  ? `${c.conditions.steps.length} step${c.conditions.steps.length > 1 ? "s" : ""}`
+  : c.conditions?.subject || "—"}
 </div>
                 </div>
               <div className="flex items-center gap-2">
 
   <UptoBadge>
-    {c.active ? "Running" : "Draft"}
-  </UptoBadge>
+  {c.conditions?.status === "paused"
+    ? "Paused"
+    : c.active
+      ? "Running"
+      : "Draft"}
+</UptoBadge>
 
-  {!c.active ? (
-    <UptoButton
-      variant="ghost"
-      onClick={() => handleLaunch(c.id)}
-    >
-      Launch
+  {c.conditions?.status === "paused" ? (
+  <>
+    <UptoButton variant="ghost" onClick={() => handleResume(c.id)}>
+      Resume
     </UptoButton>
-  ) : (
-    <UptoButton
-      variant="secondary"
-      onClick={() => handlePause(c.id)}
-    >
+
+    <UptoButton variant="secondary" onClick={() => handleStop(c.id)}>
+      Stop
+    </UptoButton>
+  </>
+) : c.conditions?.status === "cancelled" ? (
+  <span className="text-sm text-slate-500">Stopped</span>
+) : !c.active ? (
+  <UptoButton variant="ghost" onClick={() => handleLaunch(c.id)}>
+    Launch
+  </UptoButton>
+) : (
+  <>
+    <UptoButton variant="secondary" onClick={() => handlePause(c.id)}>
       Pause
     </UptoButton>
-  )}
+
+    <UptoButton variant="secondary" onClick={() => handleStop(c.id)}>
+      Stop
+    </UptoButton>
+  </>
+)}
 
   <UptoButton
   variant="ghost"
@@ -159,14 +217,123 @@ const handleEdit = (campaign) => {
       </UptoCard>
       {showCreate && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <form onSubmit={handleCreate} className="bg-white dark:bg-slate-900 rounded-2xl p-6 max-w-md w-full">
+          <form
+  onSubmit={handleCreate}
+  className="bg-white dark:bg-slate-900 rounded-2xl p-6 max-w-md w-full max-h-[90vh] overflow-y-auto"
+>
             <h3 className="text-lg font-semibold mb-4">
   {editingId ? "Edit campaign" : "New campaign"}
 </h3>
             <div className="space-y-3">
               <UptoInput label="Name" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} required />
-              <UptoInput label="Subject" value={draft.subject} onChange={(e) => setDraft({ ...draft, subject: e.target.value })} />
-              <UptoInput label="Audience" value={draft.audience} onChange={(e) => setDraft({ ...draft, audience: e.target.value })} />
+
+              <UptoInput
+  label="Audience"
+  value={draft.audience}
+  onChange={(e) =>
+    setDraft({ ...draft, audience: e.target.value })
+  }
+/>
+
+<div className="space-y-4">
+  <div className="flex items-center justify-between">
+    <h4 className="font-medium">Campaign Steps</h4>
+
+    <UptoButton
+      type="button"
+      variant="ghost"
+      onClick={() =>
+        setDraft({
+          ...draft,
+          steps: [
+            ...draft.steps,
+            {
+              day: draft.steps.length === 0
+                ? 0
+                : draft.steps[draft.steps.length - 1].day + 1,
+              subject: "",
+              body: "",
+            },
+          ],
+        })
+      }
+    >
+      + Add Step
+    </UptoButton>
+  </div>
+
+  {draft.steps.map((step, index) => (
+    <div
+      key={index}
+      className="border border-slate-200 dark:border-slate-700 rounded-xl p-4 space-y-3"
+    >
+      <div className="flex items-center justify-between">
+        <h5 className="font-medium">
+          Step {index + 1}
+        </h5>
+
+        {draft.steps.length > 1 && (
+          <UptoButton
+            type="button"
+            variant="danger"
+            onClick={() =>
+              setDraft({
+                ...draft,
+                steps: draft.steps.filter((_, i) => i !== index),
+              })
+            }
+          >
+            Remove
+          </UptoButton>
+        )}
+      </div>
+
+      <UptoInput
+        label="Day"
+        type="number"
+        min="0"
+        value={step.day}
+        onChange={(e) => {
+          const steps = [...draft.steps];
+          steps[index] = {
+            ...steps[index],
+            day: Number(e.target.value),
+          };
+          setDraft({ ...draft, steps });
+        }}
+        required
+      />
+
+      <UptoInput
+        label="Subject"
+        value={step.subject}
+        onChange={(e) => {
+          const steps = [...draft.steps];
+          steps[index] = {
+            ...steps[index],
+            subject: e.target.value,
+          };
+          setDraft({ ...draft, steps });
+        }}
+        required
+      />
+
+      <UptoInput
+        label="Email Body"
+        value={step.body}
+        onChange={(e) => {
+          const steps = [...draft.steps];
+          steps[index] = {
+            ...steps[index],
+            body: e.target.value,
+          };
+          setDraft({ ...draft, steps });
+        }}
+        required
+      />
+    </div>
+  ))}
+</div>
             </div>
             <div className="mt-4 flex justify-end gap-2">
               <UptoButton type="button" variant="ghost" onClick={() => setShowCreate(false)}>Cancel</UptoButton>

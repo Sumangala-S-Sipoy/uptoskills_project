@@ -36,7 +36,9 @@ const create = asyncHandler(async (req, res) => {
   name,
   description,
   subject,
+  body,
   audience,
+  steps,
   type = "email",
   status = "draft",
   segment,
@@ -55,8 +57,16 @@ const create = asyncHandler(async (req, res) => {
       trigger: "SCHEDULED_TIME",
       conditions: {
   segment: segment || null,
-  subject: subject || "",
+  subject: subject || steps?.[0]?.subject || "",
+  body: body || steps?.[0]?.body || "",
   audience: audience || "all",
+  steps: steps || [
+    {
+      day: 0,
+      subject: subject || "",
+      body: body || "",
+    },
+  ],
   type,
   schedule: schedule || null,
   budget: budget || null,
@@ -75,12 +85,14 @@ const update = asyncHandler(async (req, res) => {
   name,
   description,
   subject,
+  body,
   audience,
+  steps,
   status,
   segment,
   content,
   budget,
-} = req.body;
+  } = req.body;
   const campaign = await prisma.workflow.findFirst({ where: { id: Number(req.params.id), orgId: req.orgId } });
   if (!campaign) throw new AppError("Campaign not found.", 404);
   const data = {};
@@ -91,8 +103,10 @@ const update = asyncHandler(async (req, res) => {
   segment !== undefined ||
   budget !== undefined ||
   subject !== undefined ||
-  audience !== undefined
-) {
+  body !== undefined ||
+  audience !== undefined ||
+  steps !== undefined
+  ) {
   const existingConditions =
     (typeof campaign.conditions === "object" && campaign.conditions)
       ? campaign.conditions
@@ -103,15 +117,19 @@ const update = asyncHandler(async (req, res) => {
     existingConditions.budget = budget;
   if (subject !== undefined)
     existingConditions.subject = subject;
+  if (body !== undefined)
+  existingConditions.body = body;
+  if (steps !== undefined)
+  existingConditions.steps = steps;
   if (audience !== undefined)
     existingConditions.audience = audience;
   data.conditions = existingConditions;
-}
+  }
   if (content !== undefined) data.actions = content;
   await prisma.workflow.update({ where: { id: campaign.id }, data });
   invalidateCache("/campaigns");
   return response.success(res, { message: "Campaign updated." });
-});
+  });
 
 const remove = asyncHandler(async (req, res) => {
   const result = await prisma.workflow.deleteMany({ where: { id: Number(req.params.id), orgId: req.orgId } });
@@ -121,35 +139,367 @@ const remove = asyncHandler(async (req, res) => {
 });
 
 const launch = asyncHandler(async (req, res) => {
-  const campaign = await prisma.workflow.findFirst({ where: { id: Number(req.params.id), orgId: req.orgId } });
-  if (!campaign) throw new AppError("Campaign not found.", 404);
-  await prisma.workflow.update({
-    where: { id: campaign.id },
-    data: { active: true, runCount: { increment: 1 }, lastRunAt: new Date() },
+  const campaign = await prisma.workflow.findFirst({
+    where: {
+      id: Number(req.params.id),
+      orgId: req.orgId,
+    },
   });
+
+  if (!campaign) {
+    throw new AppError("Campaign not found.", 404);
+  }
+
+  if (campaign.conditions?.status === "running") {
+  throw new AppError("Campaign is already running.", 400);
+}
+
+  const conditions =
+    typeof campaign.conditions === "object" && campaign.conditions
+      ? campaign.conditions
+      : {};
+
+  const subject = conditions.subject || "";
+  const body = conditions.body || "";
+  const audience = conditions.audience || "all";
+
+  const campaignSteps = Array.isArray(conditions.steps)
+  ? conditions.steps
+  : [
+      {
+        day: 0,
+        subject,
+        body,
+      },
+    ];
+
+
+
+
+  if (!subject) {
+    throw new AppError("Campaign subject is required.", 400);
+  }
+
+  if (!body) {
+    throw new AppError("Campaign email body is required.", 400);
+  }
+
+  // Get leads for this campaign
+  let leads;
+
+  if (audience === "all") {
+    leads = await prisma.lead.findMany({
+  where: {
+    orgId: req.orgId,
+  },
+  select: {
+    id: true,
+    name: true,
+    email: true,
+  },
+});
+  } else {
+    throw new AppError(
+      "Only the 'all' audience is currently supported.",
+      400
+    );
+  }
+
+  if (leads.length === 0) {
+    throw new AppError("No leads with email addresses found.", 400);
+  }
+  const sequence = await prisma.sequence.create({
+  data: {
+    orgId: req.orgId,
+    userId: req.user.id,
+    name: `Campaign: ${campaign.name}`,
+    description: campaign.description || null,
+    status: "ACTIVE",
+    steps: campaignSteps,
+  },
+});
+
+  // Create an enrollment for each lead
+  for (const lead of leads) {
+  await prisma.sequenceEnrollment.create({
+    data: {
+      sequenceId: sequence.id,
+      leadId: lead.id,
+      email: lead.email,
+      status: "ACTIVE",
+      currentStep: 0,
+      steps: campaignSteps,
+      nextRunAt: new Date(),
+    },
+  });
+}
+
+  await prisma.workflow.update({
+  where: { id: campaign.id },
+  data: {
+    active: true,
+    conditions: {
+      ...conditions,
+      status: "running",
+    },
+    runCount: { increment: 1 },
+    lastRunAt: new Date(),
+  },
+});
+
   invalidateCache("/campaigns");
-  return response.success(res, { message: "Campaign launched." });
+
+  return response.success(res, {
+    message: "Campaign launched.",
+    enrolled: leads.length,
+  });
 });
 
 const pause = asyncHandler(async (req, res) => {
-  const campaign = await prisma.workflow.findFirst({ where: { id: Number(req.params.id), orgId: req.orgId } });
-  if (!campaign) throw new AppError("Campaign not found.", 404);
-  await prisma.workflow.update({ where: { id: campaign.id }, data: { active: false } });
+  const campaign = await prisma.workflow.findFirst({
+    where: {
+      id: Number(req.params.id),
+      orgId: req.orgId,
+    },
+  });
+
+  if (!campaign) {
+    throw new AppError("Campaign not found.", 404);
+  }
+
+  const sequence = await prisma.sequence.findFirst({
+    where: {
+      orgId: req.orgId,
+      name: `Campaign: ${campaign.name}`,
+    },
+    orderBy: {
+      createdAt: "desc",
+    },
+  });
+
+  await prisma.workflow.update({
+    where: {
+      id: campaign.id,
+    },
+    data: {
+  active: false,
+  conditions: {
+    ...(typeof campaign.conditions === "object" && campaign.conditions
+      ? campaign.conditions
+      : {}),
+    status: "paused",
+  },
+},
+  });
+
+  if (sequence) {
+    await prisma.sequenceEnrollment.updateMany({
+      where: {
+        sequenceId: sequence.id,
+        status: "ACTIVE",
+      },
+      data: {
+        status: "PAUSED",
+      },
+    });
+
+    await prisma.sequence.update({
+      where: {
+        id: sequence.id,
+      },
+      data: {
+        status: "PAUSED",
+      },
+    });
+  }
+
   invalidateCache("/campaigns");
-  return response.success(res, { message: "Campaign paused." });
+
+  return response.success(res, {
+    message: "Campaign paused.",
+  });
+});
+
+const resume = asyncHandler(async (req, res) => {
+  const campaign = await prisma.workflow.findFirst({
+    where: {
+      id: Number(req.params.id),
+      orgId: req.orgId,
+    },
+  });
+
+  if (!campaign) {
+    throw new AppError("Campaign not found.", 404);
+  }
+
+  const sequence = await prisma.sequence.findFirst({
+    where: {
+      orgId: req.orgId,
+      name: `Campaign: ${campaign.name}`,
+    },
+    orderBy: {
+      createdAt: "desc",
+    },
+  });
+
+ await prisma.workflow.update({
+  where: {
+    id: campaign.id,
+  },
+  data: {
+    active: true,
+    conditions: {
+      ...(typeof campaign.conditions === "object" && campaign.conditions
+        ? campaign.conditions
+        : {}),
+      status: "running",
+    },
+  },
+});
+
+  if (sequence) {
+    await prisma.sequenceEnrollment.updateMany({
+      where: {
+        sequenceId: sequence.id,
+        status: "PAUSED",
+      },
+      data: {
+        status: "ACTIVE",
+      },
+    });
+
+    await prisma.sequence.update({
+      where: {
+        id: sequence.id,
+      },
+      data: {
+        status: "ACTIVE",
+      },
+    });
+  }
+
+  invalidateCache("/campaigns");
+
+  return response.success(res, {
+    message: "Campaign resumed.",
+  });
+});
+
+const stop = asyncHandler(async (req, res) => {
+  const campaign = await prisma.workflow.findFirst({
+    where: {
+      id: Number(req.params.id),
+      orgId: req.orgId,
+    },
+  });
+
+  if (!campaign) {
+    throw new AppError("Campaign not found.", 404);
+  }
+
+  const sequence = await prisma.sequence.findFirst({
+    where: {
+      orgId: req.orgId,
+      name: `Campaign: ${campaign.name}`,
+    },
+    orderBy: {
+      createdAt: "desc",
+    },
+  });
+
+  await prisma.workflow.update({
+    where: {
+      id: campaign.id,
+    },
+    data: {
+      active: false,
+      conditions: {
+        ...(typeof campaign.conditions === "object" && campaign.conditions
+          ? campaign.conditions
+          : {}),
+        status: "cancelled",
+      },
+    },
+  });
+
+  if (sequence) {
+    await prisma.sequenceEnrollment.updateMany({
+      where: {
+        sequenceId: sequence.id,
+        status: {
+          in: ["ACTIVE", "PAUSED"],
+        },
+      },
+      data: {
+        status: "STOPPED",
+      },
+    });
+
+    await prisma.sequence.update({
+      where: {
+        id: sequence.id,
+      },
+      data: {
+        status: "ARCHIVED",
+      },
+    });
+  }
+
+  invalidateCache("/campaigns");
+
+  return response.success(res, {
+    message: "Campaign stopped.",
+  });
 });
 
 const metrics = asyncHandler(async (req, res) => {
   const campaigns = await prisma.workflow.findMany({
     where: { orgId: req.orgId },
-    select: { id: true, active: true, runCount: true, lastRunAt: true, trigger: true },
+    select: {
+      id: true,
+      active: true,
+      conditions: true,
+      runCount: true,
+      lastRunAt: true,
+      trigger: true,
+    },
   });
-  let running = 0, paused = 0, total = campaigns.length, totalRuns = 0;
+
+  let running = 0;
+  let paused = 0;
+  let totalRuns = 0;
+
   for (const c of campaigns) {
-    if (c.active) running++; else paused++;
+    const status =
+      typeof c.conditions === "object" && c.conditions
+        ? c.conditions.status
+        : null;
+
+    if (status === "running") running++;
+    if (status === "paused") paused++;
+
     totalRuns += c.runCount || 0;
   }
-  return response.success(res, { total, running, paused, totalRuns });
+
+  return response.success(res, {
+    total: campaigns.length,
+    running,
+    paused,
+    totalRuns,
+  });
 });
 
-module.exports = { list, get, create, update, remove, launch, pause, metrics, CAMPAIGN_STATUSES, CAMPAIGN_TYPES };
+module.exports = {
+  list,
+  get,
+  create,
+  update,
+  remove,
+  launch,
+  pause,
+  resume,
+  stop,
+  metrics,
+  CAMPAIGN_STATUSES,
+  CAMPAIGN_TYPES
+};

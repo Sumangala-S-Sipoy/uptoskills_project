@@ -2,9 +2,8 @@
 // so a slow iteration never overlaps the next one.
 const cron = require("node-cron");
 const { prisma } = require("../config/postgres");
-// Use createNotification (bell + push only, NO email) for cron jobs.
-// Email should only fire on direct user actions, not scheduled background tasks.
-const { createNotification } = require("../services/notificationService");
+const { sendEmail } = require("../utils/sendEmail");
+const { createInAppNotification } = require("../services/notificationService");
 const { recordAudit } = require("../services/auditService");
 const logger = require("../utils/logger");
 
@@ -12,55 +11,137 @@ let running = false;
 
 const tasks = {
   // Every minute: nudge new leads that haven't been contacted.
-  // Only processes leads added within the last 24 hours to prevent
-  // sending notifications for old historical data on every run.
   async followupNewLeads() {
-    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const oneMinuteAgo = new Date(Date.now() - 60_000);
-
     const leads = await prisma.lead.findMany({
-      where: {
-        status: "new",
-        followupSent: false,
-        createdAt: {
-          // Only leads created in the last 24 hours, older than 1 minute
-          gte: oneDayAgo,
-          lt: oneMinuteAgo,
-        },
-      },
+      where: { status: "new", followupSent: false, createdAt: { lt: new Date(Date.now() - 60_000) } },
       take: 50,
       include: { addedBy: true },
     });
-
     for (const lead of leads) {
       try {
-        // Skip leads with no owner — mark as sent to avoid looping on them
-        if (!lead.addedById) {
-          await prisma.lead.update({ where: { id: lead.id }, data: { followupSent: true } });
-          continue;
-        }
-
-        // Only send bell + push to the SPECIFIC user who added this lead.
-        // We intentionally do NOT send email from the cron job — email is only
-        // sent on direct user-triggered actions (LEAD_CREATED, DEAL_CREATED, etc.)
-        // to prevent spamming other users with automated background emails.
-        await createNotification({
+        await createInAppNotification({
           userId: lead.addedById,
+          orgId: lead.orgId,
           type: "LEAD_FOLLOWUP",
+          category: "lead",
           message: `Don't forget to follow up with ${lead.name}.`,
           link: `/app/leads/${lead.id}`,
           metadata: { leadId: lead.id },
         });
-
         await prisma.lead.update({ where: { id: lead.id }, data: { followupSent: true } });
       } catch (e) {
         logger.error("job.followup.error", { leadId: lead.id, err: e.message });
       }
     }
-
     if (leads.length) logger.info("job.followup", { count: leads.length });
   },
+  async processSequenceEnrollments() {
+  const now = new Date();
 
+  const enrollments = await prisma.sequenceEnrollment.findMany({
+    where: {
+      status: "ACTIVE",
+      nextRunAt: {
+        lte: now,
+      },
+    },
+    take: 50,
+  });
+
+  for (const enrollment of enrollments) {
+    try {
+      const steps = enrollment.steps;
+
+      if (!Array.isArray(steps) || steps.length === 0) {
+        await prisma.sequenceEnrollment.update({
+          where: { id: enrollment.id },
+          data: { status: "COMPLETED" },
+        });
+        continue;
+      }
+
+      const currentStep = steps[enrollment.currentStep];
+
+      if (!currentStep) {
+        await prisma.sequenceEnrollment.update({
+          where: { id: enrollment.id },
+          data: { status: "COMPLETED" },
+        });
+        continue;
+      }
+
+      // Replace {{first_name}} with the lead's first name
+      let firstName = "there";
+
+if (enrollment.leadId) {
+  const lead = await prisma.lead.findUnique({
+    where: { id: enrollment.leadId },
+    select: { name: true },
+  });
+
+  if (lead?.name) {
+    firstName = lead.name.split(" ")[0];
+  }
+}
+
+      const body = currentStep.body.replace(
+        /{{first_name}}/gi,
+        firstName
+      );
+
+      await sendEmail({
+        to: enrollment.email,
+        subject: currentStep.subject,
+        html: body,
+      });
+
+      const nextStepIndex = enrollment.currentStep + 1;
+      const nextStep = steps[nextStepIndex];
+
+      if (!nextStep) {
+        await prisma.sequenceEnrollment.update({
+          where: { id: enrollment.id },
+          data: {
+            status: "COMPLETED",
+            currentStep: nextStepIndex,
+            nextRunAt: null,
+          },
+        });
+      } else {
+        const nextRunAt = new Date(
+          enrollment.startedAt.getTime() +
+          nextStep.day * 24 * 60 * 60 * 1000
+        );
+
+        await prisma.sequenceEnrollment.update({
+          where: { id: enrollment.id },
+          data: {
+            currentStep: nextStepIndex,
+            nextRunAt,
+          },
+        });
+      }
+
+      logger.info("job.sequence.email_sent", {
+        enrollmentId: enrollment.id,
+        email: enrollment.email,
+        step: enrollment.currentStep,
+      });
+
+    } catch (e) {
+      logger.error("job.sequence.error", {
+        enrollmentId: enrollment.id,
+        err: e.message,
+      });
+    }
+  }
+
+  if (enrollments.length) {
+    logger.info("job.sequence", {
+      count: enrollments.length,
+    });
+  }
+},
   // Daily at 02:00: log a snapshot of platform metrics.
   async dailySnapshot() {
     const [users, orgs, leads, deals, activeSubs] = await Promise.all([
@@ -84,6 +165,7 @@ const run = async () => {
   running = true;
   try {
     await tasks.followupNewLeads();
+    await tasks.processSequenceEnrollments();
   } catch (e) {
     logger.error("job.tick.error", { err: e.message });
   } finally {
