@@ -179,10 +179,6 @@ const dispatchNotification = async ({
     console.log(`[NotificationService] Email Disabled for user ${userId} and category "${categoryName}"`);
   } else if (!user || !user.email) {
     console.warn(`[NotificationService] User Email Missing for user ${userId}. Skipping email.`);
-  } else if (process.env.EMAIL_USER && user.email === process.env.EMAIL_USER) {
-    // SAFETY GUARD: Never send a notification email to the SMTP sender account itself.
-    // EMAIL_USER is the outbound mail account, not a real user inbox.
-    console.warn(`[NotificationService] Blocked: email recipient matches EMAIL_USER (sender). Skipping.`);
   } else {
     try {
       console.log(`[NotificationService] Generating Template for type "${type}"`);
@@ -190,7 +186,7 @@ const dispatchNotification = async ({
 
       // SECURITY: 'to' is ALWAYS user.email fetched fresh from DB using userId.
       // This is the email address of the EXACT user who triggered the event.
-      // No other user's email is ever used here.
+      // No other user's email is ever used here. Never take email from req.body.
       console.log(`[NotificationService] Sending Email to user ${userId} <${user.email}>`);
       emailService.send({
         to: user.email,
