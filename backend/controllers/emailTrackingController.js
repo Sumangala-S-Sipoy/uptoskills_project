@@ -9,8 +9,18 @@ const TRANSPARENT_GIF = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAA
 
 const trackOpen = asyncHandler(async (req, res) => {
   const { messageId } = req.params;
+  const sentEvent = await prisma.emailEvent.findFirst({
+  where: {
+    messageId,
+    type: "SENT",
+  },
+  select: {
+    orgId: true,
+  },
+});
   await prisma.emailEvent.create({
     data: {
+      orgId: sentEvent?.orgId ?? null,
       type: "OPENED",
       recipient: req.query.to || "unknown",
       messageId,
@@ -29,8 +39,18 @@ const trackOpen = asyncHandler(async (req, res) => {
 const trackClick = asyncHandler(async (req, res) => {
   const { messageId } = req.params;
   const { url, label } = req.query;
+  const sentEvent = await prisma.emailEvent.findFirst({
+  where: {
+    messageId,
+    type: "SENT",
+  },
+  select: {
+    orgId: true,
+  },
+});
   await prisma.emailEvent.create({
     data: {
+      orgId: sentEvent?.orgId ?? null,
       type: "CLICKED",
       recipient: req.query.to || "unknown",
       messageId,
@@ -101,3 +121,4 @@ const generateTracking = (orgId, messageId, recipientEmail, links = []) => {
 };
 
 module.exports = { trackOpen, trackClick, logEvent, listEvents, analytics, generateTracking };
+
