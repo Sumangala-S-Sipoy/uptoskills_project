@@ -50,6 +50,34 @@ const tasks = {
 
   for (const enrollment of enrollments) {
     try {
+
+      const stopEvent = await prisma.emailEvent.findFirst({
+        where: {
+          recipient: enrollment.email,
+          type: { in: ["BOUNCED", "REPLIED"] },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      if (stopEvent) {
+        const stopStatus = stopEvent.type === "BOUNCED" ? "BOUNCED" : "REPLIED";
+
+        await prisma.sequenceEnrollment.update({
+          where: { id: enrollment.id },
+          data: {
+            status: stopStatus,
+            nextRunAt: null,
+          },
+        });
+
+        logger.info("job.sequence.stopped", {
+          enrollmentId: enrollment.id,
+          email: enrollment.email,
+          reason: stopEvent.type,
+        });
+
+        continue;
+      }
       const steps = enrollment.steps;
 
       if (!Array.isArray(steps) || steps.length === 0) {
@@ -181,3 +209,4 @@ const start = () => {
 };
 
 module.exports = { start, tasks };
+
