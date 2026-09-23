@@ -26,6 +26,7 @@ const Campaigns = () => {
   const [editingId, setEditingId] = useState(null);
   const [tags, setTags] = useState([]);
   const [segments, setSegments] = useState([]);
+  const [aiGenerating, setAiGenerating] = useState(false);
 
   const [draft, setDraft] = useState({
     name: "",
@@ -80,7 +81,39 @@ const Campaigns = () => {
       setDraft({ ...draft, audience: { type: "segment", savedSearchId: firstSegId } });
     }
   };
+  const handleGenerateAIEmail = async (index) => {
+  const step = draft.steps[index];
 
+  if (!draft.name.trim() && !step.body.trim()) {
+    toast.error("Add a campaign name or email context first.");
+    return;
+  }
+
+  setAiGenerating(true);
+
+  try {
+    const result = await campaignService.generateEmail({
+      purpose: draft.name || "Create a B2B sales outreach email",
+      context: step.body || "",
+      tone: "professional",
+    });
+
+    const steps = [...draft.steps];
+    steps[index] = {
+      ...steps[index],
+      subject: result.subject || steps[index].subject,
+      body: result.body || steps[index].body,
+    };
+
+    setDraft({ ...draft, steps });
+    toast.success("AI email generated");
+  } catch (err) {
+    console.error("AI email generation failed:", err);
+    toast.error(err?.message || "Failed to generate AI email");
+  } finally {
+    setAiGenerating(false);
+  }
+};
   const renderAudienceLabel = (aud) => {
     if (!aud || aud === "all") return "All Leads";
     let audienceObj = aud;
@@ -500,19 +533,35 @@ const Campaigns = () => {
                       required
                     />
 
-                    <UptoInput
-                      label="Email Body"
-                      value={step.body}
-                      onChange={(e) => {
-                        const steps = [...draft.steps];
-                        steps[index] = {
-                          ...steps[index],
-                          body: e.target.value,
-                        };
-                        setDraft({ ...draft, steps });
-                      }}
-                      required
-                    />
+                    <div>
+  <div className="flex items-center justify-between mb-2">
+    <label className="text-sm font-medium">
+      Email Body
+    </label>
+
+    <UptoButton
+      type="button"
+      variant="secondary"
+      onClick={() => handleGenerateAIEmail(index)}
+      disabled={aiGenerating}
+    >
+      {aiGenerating ? "Generating..." : "✨ Generate with AI"}
+    </UptoButton>
+  </div>
+
+  <UptoInput
+    value={step.body}
+    onChange={(e) => {
+      const steps = [...draft.steps];
+      steps[index] = {
+        ...steps[index],
+        body: e.target.value,
+      };
+      setDraft({ ...draft, steps });
+    }}
+    required
+  />
+</div>
                   </div>
                 ))}
               </div>

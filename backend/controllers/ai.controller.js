@@ -29,6 +29,49 @@ const outreach = asyncHandler(async (req, res) => {
   return response.success(res, result);
 });
 
+const generateCampaignEmail = asyncHandler(async (req, res) => {
+  const {
+    name,
+    company,
+    jobTitle,
+    industry,
+    location,
+    purpose,
+    context,
+    tone,
+  } = req.body;
+
+  if (!purpose) {
+    throw new AppError("purpose is required.", 400);
+  }
+
+  const result = await aiEmailService.generateCampaignEmail({
+    name,
+    company,
+    jobTitle,
+    industry,
+    location,
+    purpose,
+    context,
+    tone,
+  });
+
+  await incrementUsage({
+    userId: req.user.id,
+    orgId: req.orgId,
+    resource: "aiCalls",
+  });
+
+  await recordAudit({
+    userId: req.user.id,
+    orgId: req.orgId,
+    action: "ai.generate_campaign_email",
+    entityType: "AI",
+  });
+
+  return response.success(res, result);
+});
+
 const summarize = asyncHandler(async (req, res) => {
   const { text } = req.body;
   if (!text) throw new AppError("text is required for summarization.", 400);
@@ -60,4 +103,4 @@ const list = (req, res) =>
     ],
   });
 
-module.exports = { recommend, outreach, summarize, status, list };
+module.exports = { recommend, outreach, generateCampaignEmail, summarize, status, list };

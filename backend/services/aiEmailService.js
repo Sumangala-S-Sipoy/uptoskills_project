@@ -98,6 +98,98 @@ Rules:
   }
 };
 /*
+ AI-powered campaign email generation
+ */
+exports.generateCampaignEmail = async ({
+  name,
+  company,
+  jobTitle,
+  industry,
+  location,
+  purpose,
+  context,
+  tone = "professional",
+}) => {
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY is not configured");
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
+    const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+
+    const prompt = `Generate a professional B2B sales email for the following lead.
+
+Lead:
+Name: ${name || ""}
+Company: ${company || ""}
+Job Title: ${jobTitle || ""}
+Industry: ${industry || ""}
+Location: ${location || ""}
+
+Campaign purpose:
+${purpose || ""}
+
+Additional context:
+${context || ""}
+
+Tone:
+${tone}
+
+Rules:
+- Use only the information provided.
+- Do not invent facts about the lead or company.
+- Keep the email concise and natural.
+- Do not use generic exaggerated claims.
+- Return ONLY valid JSON.
+- Do not use markdown code fences.
+
+Return exactly:
+{
+  "subject": "",
+  "body": ""
+}`;
+
+    const response = await ai.models.generateContent({
+      model,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+    });
+
+    const text = response.text?.trim();
+
+    if (!text) {
+      throw new Error("Gemini returned an empty response");
+    }
+
+    const cleaned = text
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim();
+
+    const result = JSON.parse(cleaned);
+
+    if (!result.subject || !result.body) {
+      throw new Error("Gemini returned incomplete email data");
+    }
+
+    return {
+      subject: result.subject,
+      body: result.body,
+    };
+  } catch (error) {
+    console.error(
+      "AI Campaign Email Generation error:",
+      error.message
+    );
+
+    throw new Error("AI campaign email generation service unavailable");
+  }
+};
+
+/*
  Content summarization
  */
 exports.summarizeContent = async (text) => {
