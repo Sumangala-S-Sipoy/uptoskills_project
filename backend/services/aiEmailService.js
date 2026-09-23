@@ -1,10 +1,6 @@
 const axios = require("axios");
+const { GoogleGenAI } = require("@google/genai");
 
-const AI_URL = process.env.AI_URL;
-
-if (!AI_URL) {
-  throw new Error("AI_URL is not configured");
-}
 
 const TIMEOUT = process.env.AI_TIMEOUT || 5000;
 
@@ -37,6 +33,70 @@ Purpose: ${purpose}`,
   }
 };
 
+/*
+ AI-powered campaign personalization
+ */
+exports.personalizeCampaignEmail = async ({
+  name,
+  company,
+  jobTitle,
+  industry,
+  location,
+  originalBody,
+}) => {
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY is not configured");
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
+
+    const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+
+    const prompt = `Personalize the following B2B campaign email for the lead.
+
+Lead:
+Name: ${name || ""}
+Company: ${company || ""}
+Job Title: ${jobTitle || ""}
+Industry: ${industry || ""}
+Location: ${location || ""}
+
+Original email:
+${originalBody}
+
+Rules:
+- Keep the original purpose and meaning.
+- Make the email sound natural and professional.
+- Use only information provided about the lead.
+- Do not invent facts.
+- Keep approximately the same length as the original.
+- Do not add a subject line.
+- Return only the email body.`;
+
+    const response = await ai.models.generateContent({
+      model,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+    });
+
+    const output = response.text?.trim();
+
+    if (!output) {
+      throw new Error("Gemini returned an empty response");
+    }
+
+    return { output };
+  } catch (error) {
+    console.error(
+      "AI Campaign Personalization error:",
+      error.message
+    );
+
+    throw new Error("AI campaign personalization service unavailable");
+  }
+};
 /*
  Content summarization
  */

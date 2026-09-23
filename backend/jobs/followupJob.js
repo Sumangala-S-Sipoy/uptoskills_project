@@ -5,9 +5,11 @@ const crypto = require("crypto");
 const { prisma } = require("../config/postgres");
 const { sendEmail } = require("../utils/sendEmail");
 const { generateTracking } = require("../controllers/emailTrackingController");
+const { personalizeCampaignEmail } = require("../services/aiEmailService");
 const { createInAppNotification } = require("../services/notificationService");
 const { recordAudit } = require("../services/auditService");
 const logger = require("../utils/logger");
+
 
 let running = false;
 
@@ -43,14 +45,15 @@ const tasks = {
     const now = new Date();
 
     const enrollments = await prisma.sequenceEnrollment.findMany({
-      where: {
-        status: "ACTIVE",
-        nextRunAt: {
-          lte: now,
-        },
-      },
-      take: 50,
-    });
+  where: {
+    status: "ACTIVE",
+    nextRunAt: {
+      lte: now,
+    },
+  },
+  take: 50,
+
+});
 
     for (const enrollment of enrollments) {
 
@@ -120,24 +123,52 @@ const tasks = {
           continue;
         }
 
-        // Replace {{first_name}} with the lead's first name
-        let firstName = "there";
+     let firstName = "there";
+let lead = null;
 
-        if (enrollment.leadId) {
-          const lead = await prisma.lead.findUnique({
-            where: { id: enrollment.leadId },
-            select: { name: true },
-          });
+if (enrollment.leadId) {
+  lead = await prisma.lead.findUnique({
+  where: { id: enrollment.leadId },
+  select: {
+    name: true,
+    companyName: true,
+    jobTitle: true,
+    industry: true,
+    location: true,
+  },
+});
 
           if (lead?.name) {
             firstName = lead.name.split(" ")[0];
           }
         }
 
-        const body = currentStep.body.replace(
-          /{{first_name}}/gi,
-          firstName
-        );
+        let body = currentStep.body.replace(
+  /{{first_name}}/gi,
+  firstName
+);
+
+
+
+try {
+  const personalized = await personalizeCampaignEmail({
+    name: lead?.name || firstName,
+    company: lead?.companyName || "",
+    jobTitle: lead?.jobTitle || "",
+    industry: lead?.industry || "",
+    location: lead?.location || "",
+    originalBody: body,
+  });
+
+  if (personalized?.output) {
+    body = personalized.output;
+  }
+} catch (error) {
+  logger.warn("job.sequence.ai_personalization_failed", {
+    enrollmentId: enrollment.id,
+    err: error.message,
+  });
+}
 
         const messageId = crypto.randomUUID();
 
