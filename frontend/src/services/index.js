@@ -19,6 +19,9 @@ export const leadService = {
   myTasks: (params) => unwrapList(api.get("/lead-tasks/me/tasks", { params })),
   activity: (leadId, params) => unwrapList(api.get(`/lead-activity/${leadId}/activity`, { params })),
   import: (csv) => unwrap(api.post("/csv/leads/import", { csv })),
+  find: (searchQuery) => unwrap(api.post("/leads/find", { searchQuery })),
+  getFindStatus: (jobId) => unwrap(api.get(`/leads/find/${jobId}`)),
+  confirmFind: (jobId, selectedLeads) => unwrap(api.post(`/leads/find/${jobId}/confirm`, { selectedLeads })),
   exportUrl: (filters = {}) => {
     const q = new URLSearchParams(Object.fromEntries(Object.entries(filters).filter(([_, v]) => v !== "" && v !== null)));
     const token = typeof window !== "undefined" ? localStorage.getItem("salesforge.token") : null;

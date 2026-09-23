@@ -1,7 +1,10 @@
 const { createClient } = require("redis");
+const IORedis = require("ioredis");
+
+const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
 
 const redisClient = createClient({
-  url: process.env.REDIS_URL || "redis://localhost:6379",
+  url: redisUrl,
   socket: {
     reconnectStrategy: false,
   },
@@ -9,6 +12,15 @@ const redisClient = createClient({
 
 redisClient.on("error", (err) => {
   console.error("Redis Error:", err);
+});
+
+// BullMQ specifically requires ioredis
+const bullmqConnection = new IORedis(redisUrl, {
+  maxRetriesPerRequest: null,
+});
+
+bullmqConnection.on("error", (err) => {
+  console.error("BullMQ IORedis Error:", err);
 });
 
 const connectRedis = async () => {
@@ -22,5 +34,6 @@ const connectRedis = async () => {
 
 module.exports = {
   redisClient,
+  bullmqConnection,
   connectRedis,
 };

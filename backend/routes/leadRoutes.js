@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const ctrl = require("../controllers/leadController");
+const findCtrl = require("../controllers/findLeadsController");
 const { protect } = require("../middleware/authMiddleware");
 const tenantScope = require("../middleware/tenant");
 const validate = require("../middleware/validate");
@@ -16,6 +17,12 @@ router.use(protect, tenantScope);
 
 router.get("/stats", ctrl.stats);
 router.get("/", validate(leadQuerySchema, "query"), ctrl.getLeads);
+
+// Find Leads Routes
+router.post("/find", permit("OWNER", "ADMIN", "MEMBER"), findCtrl.findLeads);
+router.get("/find/:jobId", permit("OWNER", "ADMIN", "MEMBER"), findCtrl.getFindLeadsStatus);
+router.post("/find/:jobId/confirm", permit("OWNER", "ADMIN", "MEMBER"), findCtrl.confirmFindLeads);
+
 router.get("/:id", ctrl.getLeadById);
 router.post(
   "/",

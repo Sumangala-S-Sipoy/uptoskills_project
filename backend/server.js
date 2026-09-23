@@ -10,6 +10,7 @@ const app = require("./app");
 const { connectPostgres, prisma } = require("./config/postgres");
 const logger = require("./utils/logger");
 const jobs = require("./jobs/followupJob");
+require("./queues/findLeadsQueue"); // Initialize BullMQ queue worker
 
 // Initialize Firebase Admin for Push Notifications
 require("./config/firebase");
