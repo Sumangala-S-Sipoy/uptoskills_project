@@ -110,8 +110,6 @@ export const notificationService = {
   list: (params) => unwrap(api.get("/notifications", { params })),
   markRead: (id) => unwrap(api.patch(`/notifications/${id}/read`)),
   markAllRead: () => unwrap(api.patch("/notifications/read-all")),
-  remove: (id) => unwrap(api.delete(`/notifications/${id}`)),
-  removeAll: () => unwrap(api.delete("/notifications")),
   unreadCount: async () => {
     const data = await unwrap(api.get("/notifications", { params: { limit: 1 } }));
     return data?.summary?.unreadCount || 0;
@@ -446,6 +444,8 @@ export const campaignService = {
   remove: (id) => unwrap(api.delete(`/campaigns/${id}`)),
   launch: (id) => unwrap(api.post(`/campaigns/${id}/launch`)),
   pause: (id) => unwrap(api.post(`/campaigns/${id}/pause`)),
+  resume: (id) => unwrap(api.post(`/campaigns/${id}/resume`)),
+  stop: (id) => unwrap(api.post(`/campaigns/${id}/stop`)),
   metrics: () => unwrap(api.get("/campaigns/metrics")),
 };
 
