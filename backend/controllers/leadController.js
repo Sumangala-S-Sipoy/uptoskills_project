@@ -8,6 +8,7 @@ const { AppError } = require("../middleware/errorHandler");
 const { recordAudit } = require("../services/auditService");
 const { incrementUsage, enforcePlanLimit } = require("../services/usageService");
 const { publish } = require("../services/webhookService");
+const leadEnrichmentService = require("../services/leadEnrichmentService");
 
 const LEAD_INCLUDE = {
   addedBy: { select: { id: true, name: true, email: true } },
@@ -93,7 +94,7 @@ const createLead = asyncHandler(async (req, res) => {
   });
   // await updateLeadScore(lead.id);
   const updated = await prisma.lead.findUnique({ where: { id: lead.id }, include: LEAD_INCLUDE });
-  
+
   // ---------------------------------------------------------------------------
   // NOTIFICATION: Always notify the AUTHENTICATED USER who triggered this event.
   // userId must come from req.user.id (verified JWT session) — never from
@@ -172,7 +173,133 @@ const getLeadById = asyncHandler(async (req, res) => {
     },
   });
   if (!lead) throw new AppError("Lead not found.", 404);
-  return response.success(res, lead);
+
+const replyEvents = await prisma.emailEvent.findMany({
+  where: {
+    orgId: req.orgId,
+    recipient: lead.email,
+    type: "REPLIED",
+  },
+  orderBy: { createdAt: "desc" },
+  take: 10,
+});
+
+  const enrichment = lead.scoreDetails?.enrichment || lead.engagement?.enrichment || null;
+
+  return response.success(res, {
+    ...lead,
+    enrichment,
+    replyIntelligence: replyEvents.map((event) => ({
+      eventId: event.id,
+      subject: event.subject,
+      body: event.metadata?.body || null,
+      createdAt: event.createdAt,
+      ...(event.metadata?.replyIntelligence || {}),
+    })),
+  });
+});
+
+const enrichLead = asyncHandler(async (req, res) => {
+  const leadId = Number(req.params.id);
+  const lead = await prisma.lead.findFirst({
+    where: { id: leadId, orgId: req.orgId },
+  });
+
+  if (!lead) {
+    throw new AppError("Lead not found.", 404);
+  }
+
+  // 1. Run real-data lead enrichment service
+  const { fieldUpdates, enrichmentPayload } = await leadEnrichmentService.enrichLeadRecord(lead);
+
+  // 2. Merge enrichment data into scoreDetails and engagement
+  const existingScoreDetails =
+    lead.scoreDetails && typeof lead.scoreDetails === "object" && !Array.isArray(lead.scoreDetails)
+      ? lead.scoreDetails
+      : {};
+
+  const existingEngagement =
+    lead.engagement && typeof lead.engagement === "object" && !Array.isArray(lead.engagement)
+      ? lead.engagement
+      : {};
+
+  const updatedScoreDetails = {
+    ...existingScoreDetails,
+    enrichment: enrichmentPayload,
+  };
+
+  const updatedEngagement = {
+    ...existingEngagement,
+    lastEnrichedAt: enrichmentPayload.enrichedAt,
+  };
+
+  // 3. Update lead in DB
+  const updatedLead = await prisma.lead.update({
+    where: { id: lead.id },
+    data: {
+      ...fieldUpdates,
+      scoreDetails: updatedScoreDetails,
+      engagement: updatedEngagement,
+    },
+    include: {
+      ...LEAD_INCLUDE,
+      notes: {
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        include: { user: { select: { id: true, name: true, email: true } } },
+      },
+      tasks: {
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        include: { user: { select: { id: true, name: true, email: true } } },
+      },
+      activities: {
+        orderBy: { createdAt: "desc" },
+        take: 20,
+        include: { user: { select: { id: true, name: true, email: true } } },
+      },
+    },
+  });
+
+  // 4. Record Activity Timeline
+  const appliedCount = Object.keys(fieldUpdates).length;
+  recordActivity({
+    leadId: lead.id,
+    userId: req.user.id,
+    orgId: req.orgId,
+    type: "UPDATED",
+    title: `${req.user.name} enriched lead intelligence`,
+    body: appliedCount > 0
+      ? `Updated ${appliedCount} field${appliedCount > 1 ? "s" : ""} (${Object.keys(fieldUpdates).join(", ")}). Mail deliverability: ${enrichmentPayload.verification.emailDeliverability}.`
+      : `Verified domain and email deliverability: ${enrichmentPayload.verification.emailDeliverability}.`,
+    metadata: {
+      enrichment: {
+        status: enrichmentPayload.status,
+        sources: enrichmentPayload.sources,
+        verification: enrichmentPayload.verification,
+      },
+    },
+  }).catch(console.error);
+
+  // 5. Usage, Audit, and Webhook
+  incrementUsage({ userId: req.user.id, orgId: req.orgId, resource: "searches" }).catch(console.error);
+  recordAudit({
+    userId: req.user.id,
+    orgId: req.orgId,
+    action: "lead.enrich",
+    entityType: "Lead",
+    entityId: lead.id,
+    metadata: {
+      appliedFields: Object.keys(fieldUpdates),
+      mailProvider: enrichmentPayload.verification.mailProvider,
+    },
+  }).catch(console.error);
+  publish({ orgId: req.orgId, event: "LEAD_UPDATED", payload: { leadId: lead.id, action: "enriched" } }).catch(console.error);
+
+  return response.success(res, {
+    ...updatedLead,
+    enrichment: enrichmentPayload,
+  });
 });
 
 const updateLead = asyncHandler(async (req, res) => {
@@ -365,4 +492,4 @@ const stats = asyncHandler(async (req, res) => {
   });
 });
 
-module.exports = { createLead, getLeads, getLeadById, updateLead, deleteLead, bulkUpdate, bulkDelete, stats, buildLeadWhere };
+module.exports = { createLead, getLeads, getLeadById, enrichLead, updateLead, deleteLead, bulkUpdate, bulkDelete, stats, buildLeadWhere };

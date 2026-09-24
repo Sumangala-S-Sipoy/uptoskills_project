@@ -209,3 +209,83 @@ exports.summarizeContent = async (text) => {
     throw new Error("AI summarization service unavailable");
   }
 };
+/*
+ AI-powered reply intelligence
+ */
+exports.analyzeEmailReply = async ({
+  replyBody,
+  leadName,
+  company,
+  jobTitle,
+}) => {
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY is not configured");
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
+    const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+
+    const prompt = `Analyze this incoming B2B sales email reply.
+
+Lead:
+Name: ${leadName || ""}
+Company: ${company || ""}
+Job Title: ${jobTitle || ""}
+
+Reply:
+${replyBody}
+
+Return ONLY valid JSON with exactly these fields:
+{
+  "intent": "INTERESTED|MEETING_REQUEST|QUESTION|NOT_INTERESTED|OUT_OF_OFFICE|OTHER",
+  "sentiment": "POSITIVE|NEUTRAL|NEGATIVE",
+  "summary": "short summary of what the lead said",
+  "suggestedAction": "short recommended next action",
+  "suggestedReply": "short professional reply"
+}
+
+Rules:
+- Classify only from the supplied reply.
+- Do not invent facts.
+- If the lead asks for a meeting, use MEETING_REQUEST.
+- If the lead shows buying interest without explicitly requesting a meeting, use INTERESTED.
+- If the lead asks for information or clarification, use QUESTION.
+- If the lead clearly declines, use NOT_INTERESTED.
+- If it is an automatic absence message, use OUT_OF_OFFICE.
+- Keep summary and suggestedAction concise.
+- Keep suggestedReply professional and natural.`;
+
+    const response = await ai.models.generateContent({
+      model,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+    });
+
+    const text = response.text?.trim();
+
+    if (!text) {
+      throw new Error("Gemini returned an empty response");
+    }
+
+    const cleaned = text
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim();
+
+    const result = JSON.parse(cleaned);
+
+    return {
+      intent: result.intent,
+      sentiment: result.sentiment,
+      summary: result.summary,
+      suggestedAction: result.suggestedAction,
+      suggestedReply: result.suggestedReply,
+    };
+  } catch (error) {
+    console.error("AI Reply Intelligence error:", error.message);
+    throw new Error("AI reply intelligence service unavailable");
+  }
+};

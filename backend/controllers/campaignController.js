@@ -488,7 +488,160 @@ const metrics = asyncHandler(async (req, res) => {
     totalRuns,
   });
 });
+const optimization = asyncHandler(async (req, res) => {
+  const campaigns = await prisma.workflow.findMany({
+    where: { orgId: req.orgId },
+    select: {
+      id: true,
+      name: true,
+      conditions: true,
+    },
+  });
 
+  const sequences = await prisma.sequence.findMany({
+    where: { orgId: req.orgId },
+    select: {
+      id: true,
+      name: true,
+      steps: true,
+    },
+  });
+
+  const sequenceByName = new Map(
+    sequences.map((sequence) => [sequence.name, sequence])
+  );
+
+  const results = [];
+
+  for (const campaign of campaigns) {
+    const sequence = sequenceByName.get(`Campaign: ${campaign.name}`);
+
+    if (!sequence) {
+      continue;
+    }
+
+    const sentEvents = await prisma.emailEvent.findMany({
+      where: {
+        orgId: req.orgId,
+        type: "SENT",
+        metadata: {
+          path: ["sequenceId"],
+          equals: sequence.id,
+        },
+      },
+      select: {
+        id: true,
+        messageId: true,
+        subject: true,
+        metadata: true,
+      },
+    });
+
+    if (sentEvents.length === 0) {
+      results.push({
+        campaignId: campaign.id,
+        campaignName: campaign.name,
+        sequenceId: sequence.id,
+        sent: 0,
+        opened: 0,
+        clicked: 0,
+        replied: 0,
+        openRate: 0,
+        clickRate: 0,
+        replyRate: 0,
+        recommendations: ["No attributed email data yet."],
+      });
+      continue;
+    }
+
+    const messageIds = sentEvents
+      .map((event) => event.messageId)
+      .filter(Boolean);
+
+    const engagementEvents = await prisma.emailEvent.findMany({
+      where: {
+        orgId: req.orgId,
+        messageId: { in: messageIds },
+        type: {
+          in: ["OPENED", "CLICKED", "REPLIED"],
+        },
+      },
+      select: {
+        messageId: true,
+        type: true,
+        metadata: true,
+      },
+    });
+
+    const uniqueByType = (type) =>
+      new Set(
+        engagementEvents
+          .filter((event) => event.type === type && event.messageId)
+          .map((event) => event.messageId)
+      ).size;
+
+    const opened = uniqueByType("OPENED");
+    const clicked = uniqueByType("CLICKED");
+    const replied = uniqueByType("REPLIED");
+
+    const sent = sentEvents.length;
+
+    const openRate = Math.round((opened / sent) * 100);
+    const clickRate = Math.round((clicked / sent) * 100);
+    const replyRate = Math.round((replied / sent) * 100);
+
+    const recommendations = [];
+
+    if (openRate < 20) {
+      recommendations.push(
+        "Test stronger or more personalized subject lines."
+      );
+    }
+
+    if (openRate >= 20 && clickRate < 5) {
+      recommendations.push(
+        "Improve email body relevance and strengthen the call to action."
+      );
+    }
+
+    if (clickRate >= 5 && replyRate < 3) {
+      recommendations.push(
+        "Add a clearer conversational CTA to encourage replies."
+      );
+    }
+
+    if (replyRate >= 3) {
+      recommendations.push(
+        "This campaign is generating replies; consider expanding its audience."
+      );
+    }
+
+    if (recommendations.length === 0) {
+      recommendations.push(
+        "Continue monitoring performance and test one variable at a time."
+      );
+    }
+
+    results.push({
+      campaignId: campaign.id,
+      campaignName: campaign.name,
+      sequenceId: sequence.id,
+      sent,
+      opened,
+      clicked,
+      replied,
+      openRate,
+      clickRate,
+      replyRate,
+      recommendations,
+    });
+  }
+
+  return response.success(res, {
+    campaigns: results,
+    generatedAt: new Date(),
+  });
+});
 module.exports = {
   list,
   get,
@@ -500,6 +653,7 @@ module.exports = {
   resume,
   stop,
   metrics,
+  optimization,
   CAMPAIGN_STATUSES,
   CAMPAIGN_TYPES
 };

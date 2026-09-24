@@ -9,6 +9,7 @@ const { cacheMiddleware } = require("../utils/cache");
 router.use(protect, tenantScope);
 
 router.get("/metrics", ctrl.metrics);
+router.get("/optimization", ctrl.optimization);
 router.get("/", cacheMiddleware(30), ctrl.list);
 router.get("/:id", ctrl.get);
 router.post("/", permit("OWNER", "ADMIN"), ctrl.create);
