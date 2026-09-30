@@ -26,6 +26,9 @@ const Campaigns = () => {
   const [editingId, setEditingId] = useState(null);
   const [tags, setTags] = useState([]);
   const [segments, setSegments] = useState([]);
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [optimization, setOptimization] = useState(null);
+  const [optimizationLoading, setOptimizationLoading] = useState(false);
 
   const [draft, setDraft] = useState({
     name: "",
@@ -61,11 +64,23 @@ const Campaigns = () => {
     } catch (e) { setError(e?.message || "Failed to load"); }
     finally { setLoading(false); }
   };
+const loadOptimization = async () => {
+  setOptimizationLoading(true);
 
+  try {
+    const result = await campaignService.optimization();
+    setOptimization(result);
+  } catch (e) {
+    console.error("Failed to load campaign optimization:", e);
+  } finally {
+    setOptimizationLoading(false);
+  }
+};
   useEffect(() => {
-    load();
-    loadMetaData();
-  }, []);
+  load();
+  loadMetaData();
+  loadOptimization();
+}, []);
 
   const handleAudienceTypeChange = (type) => {
     if (type === "all") {
@@ -80,7 +95,39 @@ const Campaigns = () => {
       setDraft({ ...draft, audience: { type: "segment", savedSearchId: firstSegId } });
     }
   };
+  const handleGenerateAIEmail = async (index) => {
+  const step = draft.steps[index];
 
+  if (!draft.name.trim() && !step.body.trim()) {
+    toast.error("Add a campaign name or email context first.");
+    return;
+  }
+
+  setAiGenerating(true);
+
+  try {
+    const result = await campaignService.generateEmail({
+      purpose: draft.name || "Create a B2B sales outreach email",
+      context: step.body || "",
+      tone: "professional",
+    });
+
+    const steps = [...draft.steps];
+    steps[index] = {
+      ...steps[index],
+      subject: result.subject || steps[index].subject,
+      body: result.body || steps[index].body,
+    };
+
+    setDraft({ ...draft, steps });
+    toast.success("AI email generated");
+  } catch (err) {
+    console.error("AI email generation failed:", err);
+    toast.error(err?.message || "Failed to generate AI email");
+  } finally {
+    setAiGenerating(false);
+  }
+};
   const renderAudienceLabel = (aud) => {
     if (!aud || aud === "all") return "All Leads";
     let audienceObj = aud;
@@ -228,6 +275,86 @@ const Campaigns = () => {
         subtitle="Email and marketing automation"
         actions={<UptoButton onClick={() => setShowCreate(true)}><Plus className="mr-1 h-4 w-4 inline" /> New campaign</UptoButton>}
       />
+      {optimizationLoading ? (
+  <UptoCard className="mb-6">
+    <UptoSpinner />
+  </UptoCard>
+) : optimization?.campaigns?.length > 0 ? (
+  <UptoCard className="mb-6">
+    <div className="mb-4">
+      <h2 className="text-lg font-semibold">Campaign Optimization</h2>
+      <p className="text-sm text-muted-foreground">
+        Performance insights and recommendations based on campaign engagement.
+      </p>
+    </div>
+
+    <div className="space-y-4">
+      {optimization.campaigns.map((campaign) => (
+        <div
+          key={campaign.campaignId}
+          className="rounded-lg border p-4"
+        >
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-medium">{campaign.campaignName}</h3>
+
+            <UptoBadge>
+              {campaign.sent} sent
+            </UptoBadge>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+            <div>
+              <div className="text-xs text-muted-foreground">Open Rate</div>
+              <div className="text-lg font-semibold">
+                {campaign.openRate}%
+              </div>
+            </div>
+
+            <div>
+              <div className="text-xs text-muted-foreground">Click Rate</div>
+              <div className="text-lg font-semibold">
+                {campaign.clickRate}%
+              </div>
+            </div>
+
+            <div>
+              <div className="text-xs text-muted-foreground">Reply Rate</div>
+              <div className="text-lg font-semibold">
+                {campaign.replyRate}%
+              </div>
+            </div>
+
+            <div>
+              <div className="text-xs text-muted-foreground">Replies</div>
+              <div className="text-lg font-semibold">
+                {campaign.replied}
+              </div>
+            </div>
+          </div>
+
+          {campaign.recommendations?.length > 0 && (
+            <div>
+              <div className="text-sm font-medium mb-2">
+                Recommendations
+              </div>
+
+              <ul className="space-y-1">
+                {campaign.recommendations.map((recommendation, index) => (
+                  <li
+                    key={index}
+                    className="text-sm text-muted-foreground"
+                  >
+                    • {recommendation}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  </UptoCard>
+) : null}
       <UptoCard>
         {loading && <UptoSpinner />}
         {error && <UptoError message={error} onRetry={load} />}
@@ -500,19 +627,35 @@ const Campaigns = () => {
                       required
                     />
 
-                    <UptoInput
-                      label="Email Body"
-                      value={step.body}
-                      onChange={(e) => {
-                        const steps = [...draft.steps];
-                        steps[index] = {
-                          ...steps[index],
-                          body: e.target.value,
-                        };
-                        setDraft({ ...draft, steps });
-                      }}
-                      required
-                    />
+                    <div>
+  <div className="flex items-center justify-between mb-2">
+    <label className="text-sm font-medium">
+      Email Body
+    </label>
+
+    <UptoButton
+      type="button"
+      variant="secondary"
+      onClick={() => handleGenerateAIEmail(index)}
+      disabled={aiGenerating}
+    >
+      {aiGenerating ? "Generating..." : "✨ Generate with AI"}
+    </UptoButton>
+  </div>
+
+  <UptoInput
+    value={step.body}
+    onChange={(e) => {
+      const steps = [...draft.steps];
+      steps[index] = {
+        ...steps[index],
+        body: e.target.value,
+      };
+      setDraft({ ...draft, steps });
+    }}
+    required
+  />
+</div>
                   </div>
                 ))}
               </div>

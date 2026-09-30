@@ -223,14 +223,19 @@ try {
         }
 
         await prisma.emailEvent.create({
-          data: {
-            orgId: enrollment.orgId,
-            type: "SENT",
-            recipient: enrollment.email,
-            subject: currentStep.subject,
-            messageId,
-          },
-        });
+  data: {
+    orgId: enrollment.orgId,
+    type: "SENT",
+    recipient: enrollment.email,
+    subject: currentStep.subject,
+    messageId,
+    metadata: {
+      enrollmentId: enrollment.id,
+      sequenceId: enrollment.sequenceId,
+      step: enrollment.currentStep,
+    },
+  },
+});
 
         const nextStepIndex = enrollment.currentStep + 1;
         const nextStep = steps[nextStepIndex];

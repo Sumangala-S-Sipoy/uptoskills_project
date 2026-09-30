@@ -26,25 +26,34 @@ const API_KEYS = {
  */
 async function generateAiInsights(prompt) {
   if (!API_KEYS.gemini) {
-    return generateFallbackAiInsights(prompt);
+    throw new Error("GEMINI_API_KEY is not configured");
   }
+
   try {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${API_KEYS.gemini}`;
+
     const payload = {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: {
         responseMimeType: "application/json"
       }
     };
-    const res = await axios.post(url, payload, { headers: { "Content-Type": "application/json" }, timeout: 10000 });
+
+    const res = await axios.post(url, payload, {
+      headers: { "Content-Type": "application/json" },
+      timeout: 30000
+    });
+
     const text = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (text) {
-      return JSON.parse(text);
+
+    if (!text) {
+      throw new Error("Empty response from Gemini");
     }
-    throw new Error("Empty response from Gemini");
+
+    return JSON.parse(text);
   } catch (error) {
-    console.error("Gemini AI API error, running fallback:", error.message);
-    return generateFallbackAiInsights(prompt);
+    console.error("Gemini AI API error:", error.message);
+    throw new Error("AI insights temporarily unavailable");
   }
 }
 
@@ -212,20 +221,48 @@ async function searchIntel(module, query, filters = {}) {
 
   // Inject AI summary details based on module outcomes
   if (result.data) {
-    const aiPrompt = `
-      Please analyze this Sales OSINT search output. Provide a structured JSON output with fields:
-      - summary (paragraph company/contact summary)
-      - contactSummary (contact profile summary)
-      - salesInsights (array of string notes)
-      - suggestedActions (array of {action, description})
-      - opportunityScore (number 1-100)
-      - competitors (array of {name, marketShare, strength, weakness})
-      - followUpEmail (string template follow up email)
+    const aiPrompt = module === "lead_enrichment"
+  ? `
+You are a B2B lead research assistant.
 
-      Search query: "${query}"
-      Module type: "${module}"
-      Search Data: ${JSON.stringify(result.data)}
-    `;
+Analyze ONLY the supplied enrichment data.
+
+Return ONLY valid JSON with:
+- summary: concise factual summary
+- contactSummary: factual contact summary
+- salesInsights: array of evidence-based insights
+- suggestedActions: array of {action, description}
+- opportunityScore: integer 0-100, or null if there is insufficient evidence
+- competitors: []
+- followUpEmail: a short personalized email based only on supplied data
+
+Strict rules:
+- Never invent facts.
+- Never assume a company uses a technology unless the data explicitly says so.
+- Never invent competitors, funding, news, job activity, or business events.
+- Do not claim a person is a decision-maker unless the supplied data supports it.
+- If information is unavailable, leave it out.
+- suggestedActions must be based on actual supplied information.
+- opportunityScore must reflect only the evidence in the supplied data.
+- Return JSON only.
+
+Search query: "${query}"
+Enrichment Data: ${JSON.stringify(result.data)}
+`
+  : `
+Please analyze this Sales OSINT search output. Provide a structured JSON output with fields:
+- summary (paragraph company/contact summary)
+- contactSummary (contact profile summary)
+- salesInsights (array of string notes)
+- suggestedActions (array of {action, description})
+- opportunityScore (number 1-100)
+- competitors (array of {name, marketShare, strength, weakness})
+- followUpEmail (string template follow up email)
+
+Search query: "${query}"
+Module type: "${module}"
+Search Data: ${JSON.stringify(result.data)}
+`;
     result.ai = await generateAiInsights(aiPrompt);
   }
 
@@ -568,20 +605,17 @@ async function getDecisionMakers(domain) {
 }
 
 async function enrichLead(query) {
-  const emailIntel = await getEmailIntelligence(query.includes("@") ? query : `contact@${query}`);
+  const emailIntel = await getEmailIntelligence(
+    query.includes("@") ? query : `contact@${query}`
+  );
+
   const domainIntel = await getDomainIntelligence(emailIntel.domain);
   const personIntel = await getPersonIntelligence(query);
+
   return {
     email: emailIntel,
     company: domainIntel,
-    person: personIntel,
-    leadScore: 88,
-    priority: "HIGH",
-    insights: [
-      "Contact title VP holds purchase decision power.",
-      "Company uses HubSpot CRM and Stripe indicating B2B commercial readiness.",
-      "Lead has recently opened 2 cold outreach mails."
-    ]
+    person: personIntel
   };
 }
 

@@ -24,6 +24,7 @@ router.get("/find/:jobId", permit("OWNER", "ADMIN", "MEMBER"), findCtrl.getFindL
 router.post("/find/:jobId/confirm", permit("OWNER", "ADMIN", "MEMBER"), findCtrl.confirmFindLeads);
 
 router.get("/:id", ctrl.getLeadById);
+router.post("/:id/enrich", permit("OWNER", "ADMIN", "MEMBER"), ctrl.enrichLead);
 router.post(
   "/",
   permit("OWNER", "ADMIN", "MEMBER"),

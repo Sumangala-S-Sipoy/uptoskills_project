@@ -8,6 +8,7 @@ router.get("/", ctrl.list);
 router.get("/status", ctrl.status);
 router.post("/recommend", protect, tenantScope, ctrl.recommend);
 router.post("/outreach", ctrl.outreach);
+router.post("/generate-campaign-email", protect, tenantScope, ctrl.generateCampaignEmail);
 router.post("/summarize", ctrl.summarize);
 
 module.exports = router;
