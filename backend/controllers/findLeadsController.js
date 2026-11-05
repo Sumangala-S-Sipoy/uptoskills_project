@@ -7,7 +7,8 @@ const asyncHandler = require("../utils/asyncHandler");
 const response = require("../utils/response");
 const { AppError } = require("../middleware/errorHandler");
 
-const SCRAPER_API_URL = process.env.SCRAPER_API_URL || "http://localhost:8001";
+const SCRAPER_API_URL =
+  process.env.JOB_SCRAPER_URL || process.env.SCRAPER_API_URL || "http://localhost:8001";
 
 // 1. POST /api/leads/find
 const findLeads = asyncHandler(async (req, res) => {
@@ -18,16 +19,19 @@ const findLeads = asyncHandler(async (req, res) => {
 
   // Call FastAPI to start scraping
   let fastapiRes;
-  try {
-    fastapiRes = await axios.post(`${SCRAPER_API_URL}/scrape`, {
-      query: searchQuery,
-      search_type: searchType,
-      limit: 20,
-    });
-  } catch (error) {
-    throw new AppError("Failed to communicate with FastAPI scraper service", 502);
-  }
-
+try {
+  fastapiRes = await axios.post(
+    `${SCRAPER_API_URL}/scrape`,
+    { query: searchQuery, search_type: searchType, limit: 10 },
+    { timeout: 60000 }
+  );
+} catch (error) {
+  console.error("Scraper start failed:", error.message);
+  throw new AppError(
+    "Could not reach the scraper service. It may be waking up, please try again in a minute.",
+    502
+  );
+}
   const fastapiJobId = fastapiRes.data.job_id;
 
   // Enqueue BullMQ job
