@@ -26,3 +26,5 @@ __pycache__/
 *.pyc
 scraper/venv/
 scraper/.env
+
+scraper/leads_with_hr.xlsx

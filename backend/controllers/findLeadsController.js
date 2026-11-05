@@ -7,9 +7,11 @@ const asyncHandler = require("../utils/asyncHandler");
 const response = require("../utils/response");
 const { AppError } = require("../middleware/errorHandler");
 
+const SCRAPER_API_URL = process.env.SCRAPER_API_URL || "http://localhost:8001";
+
 // 1. POST /api/leads/find
 const findLeads = asyncHandler(async (req, res) => {
-  const { searchQuery } = req.body;
+  const { searchQuery, searchType = "all" } = req.body;
   if (!searchQuery) {
     throw new AppError("searchQuery is required", 400);
   }
@@ -17,9 +19,10 @@ const findLeads = asyncHandler(async (req, res) => {
   // Call FastAPI to start scraping
   let fastapiRes;
   try {
-    fastapiRes = await axios.post("http://localhost:8000/scrape", {
+    fastapiRes = await axios.post(`${SCRAPER_API_URL}/scrape`, {
       query: searchQuery,
-      limit: 20 // Default limit, can be parameterized
+      search_type: searchType,
+      limit: 20,
     });
   } catch (error) {
     throw new AppError("Failed to communicate with FastAPI scraper service", 502);
@@ -39,13 +42,13 @@ const findLeads = asyncHandler(async (req, res) => {
 const getFindLeadsStatus = asyncHandler(async (req, res) => {
   const { jobId } = req.params;
   const job = await findLeadsQueue.getJob(jobId);
-  
+
   if (!job) {
     throw new AppError("Job not found", 404);
   }
 
   const state = await job.getState();
-  
+
   // States: waiting, active, completed, failed, delayed, etc.
   if (state === "completed") {
     // Fetch raw leads from redis
@@ -70,25 +73,33 @@ const confirmFindLeads = asyncHandler(async (req, res) => {
   const results = { created: [], skipped: [] };
 
   for (const item of selectedLeads) {
-    // Skip if HR CONTACT does not contain a parseable email
-    // A simplistic check: HR CONTACT needs to include an "@" symbol.
     const hrContact = item["HR CONTACT"] || "";
     let parsedEmail = null;
-    
-    if (hrContact.includes("Inferred (unverified)")) {
+
+    // Never save generic, inferred or missing emails
+    const verification = String(item["VERIFICATION"] || "").toLowerCase();
+    if (
+      hrContact.includes("Inferred (unverified)") ||
+      verification.includes("generic email") ||
+      verification.includes("not disclosed")
+    ) {
       results.skipped.push({
         item,
-        reason: "unverified inferred email, not used"
+        reason: "generic, inferred or missing email, not used",
       });
       continue;
     }
 
-    const emailMatch = hrContact.match(/Email:\s*([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)/i);
+    const emailMatch = hrContact.match(
+      /Email:\s*([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)/i
+    );
     if (emailMatch && emailMatch[1]) {
       parsedEmail = emailMatch[1].toLowerCase();
     } else if (hrContact.includes("@")) {
       // Fallback simple regex extraction if it wasn't prefixed with "Email: "
-      const rawMatch = hrContact.match(/[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+/);
+      const rawMatch = hrContact.match(
+        /[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+/
+      );
       if (rawMatch) {
         parsedEmail = rawMatch[0].toLowerCase();
       }
@@ -97,7 +108,7 @@ const confirmFindLeads = asyncHandler(async (req, res) => {
     if (!parsedEmail) {
       results.skipped.push({
         item,
-        reason: "No parseable email address in HR CONTACT"
+        reason: "No parseable email address in HR CONTACT",
       });
       continue;
     }
@@ -107,9 +118,11 @@ const confirmFindLeads = asyncHandler(async (req, res) => {
     const jobTitle = item["JOB TITLE"] || null;
     const location = item["AREA / LOCATION"] || null;
     const score = item["SCORE"] || 0;
-    
+
     // Construct name as "HR — {COMPANY}"
-    const leadName = companyName ? `HR — ${companyName}` : "HR — Unknown Company";
+    const leadName = companyName
+      ? `HR \u2014 ${companyName}`
+      : "HR \u2014 Unknown Company";
 
     const engagement = {
       salary: item["SALARY"],
@@ -117,21 +130,19 @@ const confirmFindLeads = asyncHandler(async (req, res) => {
       jobUrl: item["JOB URL"],
       fullDescription: item["FULL DESCRIPTION"],
       originalSource: item["SOURCE"],
-      discovered: item["DISCOVERED"]
+      discovered: item["DISCOVERED"],
     };
 
     // Dedup-on-email / create logic
     try {
-      const existing = await prisma.lead.findUnique({ where: { email: parsedEmail } });
-      
+      const existing = await prisma.lead.findUnique({
+        where: { email: parsedEmail },
+      });
+
       if (existing) {
-        // Skip or update? The spec says:
-        // "Create the lead using the same logic/dedup-on-email behavior as the existing createLead controller"
-        // Existing createLead logic returns the existing lead if it's in the same org, or throws an error.
-        // We will just skip creating a new one and maybe push to skipped.
         results.skipped.push({
           item,
-          reason: "Lead with this email already exists"
+          reason: "Lead with this email already exists",
         });
       } else {
         const lead = await prisma.lead.create({
@@ -143,11 +154,11 @@ const confirmFindLeads = asyncHandler(async (req, res) => {
             location: location,
             score: score,
             status: "new",
-            source: "database_search", // "database_search" is an enum val matching our needs
+            source: "database_search",
             engagement: engagement,
             orgId: req.orgId,
-            addedById: req.user.id
-          }
+            addedById: req.user.id,
+          },
         });
 
         await recordActivity({
@@ -155,7 +166,7 @@ const confirmFindLeads = asyncHandler(async (req, res) => {
           userId: req.user.id,
           orgId: req.orgId,
           type: "CREATED",
-          title: `${req.user.name} created this lead via Find Leads`
+          title: `${req.user.name} created this lead via Find Leads`,
         });
 
         results.created.push(lead);
@@ -163,7 +174,7 @@ const confirmFindLeads = asyncHandler(async (req, res) => {
     } catch (err) {
       results.skipped.push({
         item,
-        reason: `DB Error: ${err.message}`
+        reason: `DB Error: ${err.message}`,
       });
     }
   }
