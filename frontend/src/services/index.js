@@ -20,7 +20,11 @@ export const leadService = {
   myTasks: (params) => unwrapList(api.get("/lead-tasks/me/tasks", { params })),
   activity: (leadId, params) => unwrapList(api.get(`/lead-activity/${leadId}/activity`, { params })),
   import: (csv) => unwrap(api.post("/csv/leads/import", { csv })),
-  find: (searchQuery) => unwrap(api.post("/leads/find", { searchQuery })),
+  find: (searchQuery, searchType = "all") =>
+  unwrap(api.post("/leads/find", {
+    searchQuery,
+    searchType
+  })),
   getFindStatus: (jobId) => unwrap(api.get(`/leads/find/${jobId}`)),
   confirmFind: (jobId, selectedLeads) => unwrap(api.post(`/leads/find/${jobId}/confirm`, { selectedLeads })),
   exportUrl: (filters = {}) => {
