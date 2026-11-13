@@ -7,8 +7,11 @@ const asyncHandler = require("../utils/asyncHandler");
 const response = require("../utils/response");
 const { AppError } = require("../middleware/errorHandler");
 
-const SCRAPER_API_URL =
-  process.env.JOB_SCRAPER_URL || process.env.SCRAPER_API_URL || "http://localhost:8001";
+const SCRAPER_API_URL = (
+  process.env.JOB_SCRAPER_URL ||
+  process.env.SCRAPER_API_URL ||
+  "http://localhost:8000"
+).replace(/\/+$/, "");
 
 // 1. POST /api/leads/find
 const findLeads = asyncHandler(async (req, res) => {

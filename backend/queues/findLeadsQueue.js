@@ -3,8 +3,11 @@ const { bullmqConnection, redisClient } = require("../config/redis");
 const axios = require("axios");
 
 const queueName = "find-leads-queue";
-const SCRAPER_API_URL =
-  process.env.JOB_SCRAPER_URL || process.env.SCRAPER_API_URL || "http://localhost:8001";
+const SCRAPER_API_URL = (
+  process.env.JOB_SCRAPER_URL ||
+  process.env.SCRAPER_API_URL ||
+  "http://localhost:8000"
+).replace(/\/+$/, "");
 const MAX_WAIT_MS = 10 * 60 * 1000; // stop waiting after 10 minutes
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

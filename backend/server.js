@@ -1,11 +1,14 @@
-const { connectRedis, redisClient } = require("./config/redis");
 
 const path = require("path");
 
-for (const envFile of [path.resolve(__dirname, ".env.local"), path.resolve(__dirname, ".env")]) {
+for (const envFile of [
+  path.resolve(__dirname, ".env.local"),
+  path.resolve(__dirname, ".env")
+]) {
   require("dotenv").config({ path: envFile });
 }
 
+const { connectRedis, redisClient } = require("./config/redis");
 const app = require("./app");
 const { connectPostgres, prisma } = require("./config/postgres");
 const logger = require("./utils/logger");
